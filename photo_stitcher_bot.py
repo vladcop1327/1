@@ -8,18 +8,8 @@ import asyncio
 
 nest_asyncio.apply()
 
+
 TOKEN = '8061285829:AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM' 
-import logging
-from io import BytesIO
-from PIL import Image
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import nest_asyncio
-import asyncio
-
-nest_asyncio.apply()
-
-TOKEN = 'ТВОЙ_ТОКЕН_ЗДЕСЬ'  # Замени на свой токен
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
