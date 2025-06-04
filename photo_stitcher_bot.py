@@ -5,6 +5,8 @@ from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, CommandHandler, ContextTypes
 import nest_asyncio
 import asyncio
+import time
+from collections import defaultdict
 
 nest_asyncio.apply()
 
@@ -13,14 +15,17 @@ TOKEN = '8061285829:AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-user_photos = {}        
-stitch_direction = {}   
+user_photos = {}         
+stitch_direction = {}    
+user_albums = defaultdict(list)     
+album_timestamps = {}               
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Отправь мне 2 или 3 фото, и я их сошью вместе!\n"
-        "Перед этим используй команду /horizontal или /vertical.")
+        "Перед этим используй команду /horizontal или /vertical."
+    )
 
 
 async def set_horizontal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -35,34 +40,51 @@ async def set_vertical(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in user_photos:
-        user_photos[user_id] = []
-
+    media_group_id = update.message.media_group_id
     photo_file = await update.message.photo[-1].get_file()
     byte_data = await photo_file.download_as_bytearray()
-    user_photos[user_id].append(BytesIO(byte_data))
+    photo = BytesIO(byte_data)
 
-    photo_count = len(user_photos[user_id])
-    logger.info(f"📥 Получено фото от {user_id}, всего: {photo_count}")
+    if media_group_id:
+        key = (user_id, media_group_id)
+        user_albums[key].append(photo)
+        album_timestamps[key] = time.time()
 
-    if photo_count < 2:
-        await update.message.reply_text(f"📷 Фото принято! Жду ещё {2 - photo_count} фото.")
-    elif photo_count == 2 or photo_count == 3:
-        await update.message.reply_text("🛠 Обрабатываю фото, подожди секунду...")
-        await send_stitched_image(update, context, user_id)
+        await asyncio.sleep(2)
+
+        # если за это время ничего не добавилось — считаем, что альбом завершён
+        if time.time() - album_timestamps[key] >= 2:
+            images = user_albums.pop(key, [])
+            album_timestamps.pop(key, None)
+
+            if len(images) in [2, 3]:
+                await update.message.reply_text("🛠 Обрабатываю фото, подожди секунду...")
+                user_photos[user_id] = images
+                await send_stitched_image(update, context, user_id)
+            else:
+                await update.message.reply_text("⚠️ Нужно 2 или 3 фото. Вы отправили: " + str(len(images)))
     else:
-        await update.message.reply_text("⚠️ Можно отправлять только 2 или 3 фото. Очистка...")
-        user_photos[user_id] = []
+        if user_id not in user_photos:
+            user_photos[user_id] = []
+        user_photos[user_id].append(photo)
+        count = len(user_photos[user_id])
+
+        if count < 2:
+            await update.message.reply_text(f"📷 Фото принято! Жду ещё {2 - count} фото.")
+        elif count in [2, 3]:
+            await update.message.reply_text("🛠 Обрабатываю фото, подожди секунду...")
+            await send_stitched_image(update, context, user_id)
+        else:
+            await update.message.reply_text("⚠️ Можно отправлять только 2 или 3 фото. Очистка...")
+            user_photos[user_id] = []
 
 
 def stitch_images(images, direction='horizontal'):
     pil_images = [Image.open(img).convert("RGB") for img in images]
 
-  
     for i, img in enumerate(pil_images):
         logger.info(f"📐 До масштабирования {i+1}: {img.size}")
 
-  
     if direction == 'horizontal':
         max_height = max(img.height for img in pil_images)
         resized = [img.resize((int(img.width * max_height / img.height), max_height)) for img in pil_images]
@@ -70,11 +92,9 @@ def stitch_images(images, direction='horizontal'):
         max_width = max(img.width for img in pil_images)
         resized = [img.resize((max_width, int(img.height * max_width / img.width))) for img in pil_images]
 
-    
     for i, img in enumerate(resized):
         logger.info(f"📐 После масштабирования {i+1}: {img.size}")
 
-   
     widths, heights = zip(*(img.size for img in resized))
 
     if direction == 'horizontal':
@@ -99,7 +119,7 @@ def stitch_images(images, direction='horizontal'):
 
 
 async def send_stitched_image(update, context, user_id):
-    images = user_photos[user_id][:3] 
+    images = user_photos[user_id][:3]  
     direction = stitch_direction.get(user_id, 'horizontal')
     logger.info(f"🧵 Сшиваю {len(images)} изображений в режиме {direction} для user_id={user_id}")
     try:
