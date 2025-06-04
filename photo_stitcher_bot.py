@@ -8,7 +8,7 @@ import asyncio
 
 nest_asyncio.apply()
 
-TOKEN = '8061285829:AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM' 
+TOKEN = '8061285829:AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM'
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
