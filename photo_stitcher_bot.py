@@ -1,8 +1,8 @@
 import logging
 from io import BytesIO
 from PIL import Image
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import nest_asyncio
 import asyncio
 
@@ -13,70 +13,109 @@ TOKEN = '8061285829:AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-user_photos = {}          # user_id -> list of BytesIO
-stitch_direction = {}     # user_id -> 'horizontal' or 'vertical'
+# user_id -> state
+user_state = {}
+
+# user_id -> list of BytesIO
+user_photos = {}
+
+# Константы состояний
+WAITING_DIRECTION = "waiting_direction"
+WAITING_COUNT = "waiting_count"
+WAITING_PHOTOS = "waiting_photos"
+
+# Данные по пользователю
+user_settings = {}  # user_id -> {"direction": "horizontal", "count": 2}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Отправь мне 2 или 3 фото (по одному или альбомом), и потом используй /stitch для сшивания.\n"
-        "Команды:\n/horizontal — шить по горизонтали\n/vertical — шить по вертикали"
-    )
+    user_id = update.effective_user.id
+    user_state[user_id] = WAITING_DIRECTION
+    user_settings[user_id] = {}
+
+    keyboard = [[KeyboardButton("По горизонтали")], [KeyboardButton("По вертикали")]]
+    markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+    await update.message.reply_text("🧭 Выбери направление сшивания:", reply_markup=markup)
 
 
-async def set_horizontal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stitch_direction[update.effective_user.id] = 'horizontal'
-    await update.message.reply_text("📸 Режим сшивания установлен: по горизонтали.")
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text.strip().lower()
 
+    # выбор направления
+    if user_state.get(user_id) == WAITING_DIRECTION:
+        if "горизонт" in text:
+            user_settings[user_id]["direction"] = "горизонталь"
+        elif "вертикал" in text:
+            user_settings[user_id]["direction"] = "вертикаль"
+        else:
+            await update.message.reply_text("Пожалуйста, выбери: По горизонтали или По вертикали.")
+            return
 
-async def set_vertical(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stitch_direction[update.effective_user.id] = 'vertical'
-    await update.message.reply_text("📸 Режим сшивания установлен: по вертикали.")
+        user_state[user_id] = WAITING_COUNT
+        keyboard = [[KeyboardButton("2 фото")], [KeyboardButton("3 фото")]]
+        markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        await update.message.reply_text("🔢 Сколько фото хочешь сшить?", reply_markup=markup)
+        return
+
+    # выбор количества
+    if user_state.get(user_id) == WAITING_COUNT:
+        if "2" in text:
+            user_settings[user_id]["count"] = 2
+        elif "3" in text:
+            user_settings[user_id]["count"] = 3
+        else:
+            await update.message.reply_text("Пожалуйста, выбери: 2 фото или 3 фото.")
+            return
+
+        user_state[user_id] = WAITING_PHOTOS
+        user_photos[user_id] = []
+
+        await update.message.reply_text(
+            f"📷 Отлично! Отправь {user_settings[user_id]['count']} фото. После этого я всё сошью.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if user_state.get(user_id) != WAITING_PHOTOS:
+        await update.message.reply_text("Сначала используй /start, чтобы задать направление и количество фото.")
+        return
+
     photo_file = await update.message.photo[-1].get_file()
     byte_data = await photo_file.download_as_bytearray()
     photo = BytesIO(byte_data)
 
-    if user_id not in user_photos:
-        user_photos[user_id] = []
-
     user_photos[user_id].append(photo)
-    count = len(user_photos[user_id])
+    count_needed = user_settings[user_id]["count"]
+    count_now = len(user_photos[user_id])
 
-    if count > 3:
+    if count_now < count_needed:
+        await update.message.reply_text(f"✅ Принято! Жду ещё {count_needed - count_now} фото...")
+    elif count_now == count_needed:
+        await update.message.reply_text("🛠 Обрабатываю, подожди...")
+        await send_stitched_image(update, context, user_id)
         user_photos[user_id] = []
-        await update.message.reply_text("⚠️ Можно отправить только 2 или 3 фото. Всё сброшено. Начни заново.")
+        user_state[user_id] = None
     else:
-        await update.message.reply_text(f"📷 Фото принято! Загружено: {count}/3.\nКогда будешь готов — введи /stitch.")
-
-
-async def stitch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    images = user_photos.get(user_id, [])
-
-    if len(images) not in [2, 3]:
-        await update.message.reply_text("❗ Нужно загрузить ровно 2 или 3 фото перед сшиванием.")
-        return
-
-    await update.message.reply_text("🧵 Обрабатываю, подожди...")
-    await send_stitched_image(update, context, user_id)
+        await update.message.reply_text("⚠️ Ты отправил слишком много фото. Начни заново с /start.")
+        user_photos[user_id] = []
+        user_state[user_id] = None
 
 
 async def send_stitched_image(update, context, user_id):
-    images = user_photos[user_id][:3]
-    direction = stitch_direction.get(user_id, 'horizontal')
-    logger.info(f"🧵 Сшиваю {len(images)} изображений в режиме {direction} для user_id={user_id}")
+    images = user_photos[user_id]
+    direction = user_settings[user_id].get("direction", "horizontal")
+
     try:
         stitched = stitch_images(images, direction)
         await update.message.reply_photo(photo=stitched)
     except Exception as e:
         logger.error(f"❌ Ошибка при сшивании изображений: {e}")
         await update.message.reply_text("Произошла ошибка при сшивании изображений.")
-    finally:
-        user_photos[user_id] = []
 
 
 def stitch_images(images, direction='horizontal'):
@@ -116,9 +155,7 @@ async def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("horizontal", set_horizontal))
-    app.add_handler(CommandHandler("vertical", set_vertical))
-    app.add_handler(CommandHandler("stitch", stitch_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     print("✅ Бот запущен...")
