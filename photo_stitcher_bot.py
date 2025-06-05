@@ -6,6 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 from telegraph import upload_file
 import os
 
+# Зчитування токена і вебхуку
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
@@ -128,11 +129,12 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    await app.bot.set_webhook(url=WEBHOOK_URL)
+    print("Webhook URL:", WEBHOOK_URL)  # для перевірки
     await app.run_webhook(
         listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 8443)),
-        url_path="webhook" 
+        port=int(os.environ.get("PORT", 10000)),
+        path="webhook",
+        webhook_url=WEBHOOK_URL
     )
 
 if __name__ == '__main__':
@@ -140,5 +142,4 @@ if __name__ == '__main__':
     import nest_asyncio
     nest_asyncio.apply()
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
