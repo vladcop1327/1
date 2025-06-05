@@ -128,7 +128,6 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    # Встановлюємо webhook
     await app.bot.set_webhook(url=WEBHOOK_URL)
     await app.run_webhook(
         listen="0.0.0.0",
