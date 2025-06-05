@@ -6,9 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 from telegraph import upload_file
 import os
 
-# Зчитування токена і вебхуку
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -129,13 +127,8 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    print("Webhook URL:", WEBHOOK_URL)  # для перевірки
-    await app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 10000)),
-        path="webhook",
-        webhook_url=WEBHOOK_URL
-    )
+    print("📡 Бот запущен в режиме polling")
+    await app.run_polling()
 
 if __name__ == '__main__':
     import asyncio
