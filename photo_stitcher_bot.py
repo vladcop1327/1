@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 
 
 TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = os.getenv("https://one-pb08.onrender.com")  
+BASE_URL = os.getenv("BASE_URL")
 
 
 logging.basicConfig(level=logging.INFO)
