@@ -1,7 +1,7 @@
 import logging
 from io import BytesIO
 from PIL import Image
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegraph import upload_file
 import asyncio
@@ -10,16 +10,14 @@ import os
 
 nest_asyncio.apply()
 
-TOKEN = '8061285829:AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM'
+TOKEN = '8AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM'  # заміни на свій токен
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 user_state = {}
 user_photos = {}
 user_settings = {}
-
 
 WAITING_COUNT = "waiting_count"
 WAITING_PHOTOS = "waiting_photos"
@@ -89,13 +87,15 @@ async def send_collage(update, context, description):
     stitched = stitch_images(images)
     filename = f"collage_{user_id}.jpg"
 
+    # Зберігаємо файл на диск
     with open(filename, "wb") as f:
-        f.write(stitched.getbuffer())
+        f.write(stitched.read())
+    stitched.seek(0)
 
     try:
         response = upload_file(filename)
         url = f"https://telegra.ph{response[0]}"
-        await update.message.reply_text(f"✅ Готово!\n🔗 Ссылка: {url}\n\n📝 {description}")
+        await update.message.reply_text(f"✅ Готово!\n🔗 [Открыть коллаж]({url})\n\n📝 {description}", parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Telegraph error: {e}")
         await update.message.reply_text("❌ Ошибка при загрузке. Размер должен быть < 5MB.")
