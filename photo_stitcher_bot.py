@@ -10,7 +10,7 @@ import os
 
 nest_asyncio.apply()
 
-TOKEN = '8AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM'  # заміни на свій токен
+TOKEN = '8AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM' 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -88,6 +88,7 @@ async def send_collage(update, context, description):
     filename = f"collage_{user_id}.jpg"
 
     # Зберігаємо файл на диск
+    stitched.seek(0)
     with open(filename, "wb") as f:
         f.write(stitched.read())
     stitched.seek(0)
@@ -95,7 +96,9 @@ async def send_collage(update, context, description):
     try:
         response = upload_file(filename)
         url = f"https://telegra.ph{response[0]}"
-        await update.message.reply_text(f"✅ Готово!\n🔗 [Открыть коллаж]({url})\n\n📝 {description}", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"✅ Коллаж готов!\n\n🔗 Ссылка на фото: {url}\n\n📝 Описание: {description}"
+        )
     except Exception as e:
         logger.error(f"Telegraph error: {e}")
         await update.message.reply_text("❌ Ошибка при загрузке. Размер должен быть < 5MB.")
