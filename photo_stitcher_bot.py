@@ -49,7 +49,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif state == WAITING_DESCRIPTION:
         description = update.message.text
-        await update.message.reply_text("🌀 Создаю PDF-коллаж...")
+        await update.message.reply_text("🌀 Создаю PDF и изображение...")
         await send_pdf(update, context, description)
         user_state[user_id] = None
         user_photos[user_id] = []
@@ -90,16 +90,35 @@ async def send_pdf(update, context, description):
         return await update.message.reply_text("❌ Фото не найдены")
 
     stitched_image = stitch_images(images)
+
+    # Сохраняем как PDF
     pdf_path = f"collage_{user_id}.pdf"
     stitched_image.save(pdf_path, "PDF", resolution=100.0)
 
-    with open(pdf_path, "rb") as f:
-        await update.message.reply_document(
-            document=InputFile(f, filename="collage.pdf"),
+    # Сохраняем как JPG для предпросмотра
+    jpg_io = BytesIO()
+    stitched_image.save(jpg_io, format='JPEG', quality=90)
+    jpg_io.seek(0)
+
+    try:
+        # Отправляем изображение
+        await update.message.reply_photo(
+            photo=jpg_io,
             caption=f"📝 Описание: {description}"
         )
 
-    os.remove(pdf_path)
+        # Отправляем PDF
+        with open(pdf_path, "rb") as f:
+            await update.message.reply_document(
+                document=InputFile(f, filename="collage.pdf"),
+                caption="📄 PDF-файл с коллажем"
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при отправке: {e}")
+        await update.message.reply_text("❌ Ошибка при отправке файлов.")
+    finally:
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
 
 async def main():
     app = Application.builder().token(TOKEN).build()
