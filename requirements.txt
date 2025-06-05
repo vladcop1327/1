@@ -1,2 +1,4 @@
-python-telegram-bot==20.6
-Pillow
+python-telegram-bot[webhooks]==20.6
+pillow
+requests
+nest_asyncio
