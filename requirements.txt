@@ -1,5 +1,4 @@
 python-telegram-bot==20.6
-fpdf
+telegraph==2.2.0
 pillow
-requests
 nest_asyncio
