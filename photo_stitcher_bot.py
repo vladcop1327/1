@@ -1,12 +1,13 @@
 import logging
 import os
-import requests
 from io import BytesIO
 from PIL import Image
+import requests
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("BOT_TOKEN")
+BASE_URL = os.getenv("https://one-pb08.onrender.com")   
 IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
@@ -29,9 +30,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[KeyboardButton("2 фото")], [KeyboardButton("3 фото")]]
     markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
-    await update.message.reply_text(
-        "👋 Привет! Сколько фото хочешь сшить?", reply_markup=markup
-    )
+    await update.message.reply_text("👋 Привет! Сколько фото хочешь сшить?", reply_markup=markup)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -44,32 +43,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif "3" in text:
             user_settings[user_id]["count"] = 3
         else:
-            await update.message.reply_text("❗ Выбери: 2 фото или 3 фото.")
-            return
+            return await update.message.reply_text("❗ Выбери: 2 фото или 3 фото.")
         user_state[user_id] = WAITING_PHOTOS
-        await update.message.reply_text("📸 Отправь фото (по одному или все сразу).")
+        return await update.message.reply_text("📸 Отправь фото (по одному или все сразу).")
 
     elif state == WAITING_DESCRIPTION:
         description = update.message.text
-        await update.message.reply_text("🌀 Обрабатываю...")
-        await send_collage_link(update, context, description)
+        await update.message.reply_text("🌀 Создаю коллаж...")
+        await send_collage(update, context, description)
         user_state[user_id] = None
         user_photos[user_id] = []
         user_settings[user_id] = {}
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    state = user_state.get(user_id)
-
-    if state != WAITING_PHOTOS:
+    if user_state.get(user_id) != WAITING_PHOTOS:
         return await update.message.reply_text("🔁 Напиши /start чтобы начать заново.")
-
     photo = await update.message.photo[-1].get_file()
     data = await photo.download_as_bytearray()
     user_photos[user_id].append(BytesIO(data))
 
-    expected = user_settings[user_id].get("count")
-    if len(user_photos[user_id]) >= expected:
+    if len(user_photos[user_id]) >= user_settings[user_id].get("count", 0):
         user_state[user_id] = WAITING_DESCRIPTION
         await update.message.reply_text("✍️ Напиши описание для коллажа:")
 
@@ -86,47 +80,47 @@ def stitch_images(images):
     return result
 
 def upload_to_imgbb(image: Image.Image) -> str:
-    buffer = BytesIO()
-    image.save(buffer, format="JPEG", quality=85)
-    buffer.seek(0)
+    buffered = BytesIO()
+    image.save(buffered, format="JPEG")
+    buffered.seek(0)
+    files = {"image": buffered}
+    response = requests.post(f"https://api.imgbb.com/1/upload?key={IMGBB_API_KEY}", files=files)
+    return response.json()["data"]["url"]
 
-    response = requests.post(
-        "https://api.imgbb.com/1/upload",
-        params={"key": IMGBB_API_KEY},
-        files={"image": buffer}
-    )
-    data = response.json()
-    if response.status_code == 200 and data.get("success"):
-        return data["data"]["url"]
-    else:
-        raise Exception(data.get("error", {}).get("message", "Upload failed"))
-
-async def send_collage_link(update, context, description):
+async def send_collage(update, context, description):
     user_id = update.effective_user.id
     images = user_photos[user_id]
     if not images:
         return await update.message.reply_text("❌ Фото не найдены")
 
     result = stitch_images(images)
-
     try:
-        link = upload_to_imgbb(result)
+        url = upload_to_imgbb(result)
         await update.message.reply_photo(
-            photo=link,
-            caption=f"📝 {description}\n\n🔗 Ссылка: {link}"
+            photo=url,
+            caption=f"📝 {description}\n🔗 Ссылка на коллаж: {url}"
         )
     except Exception as e:
         logger.error(f"Ошибка при загрузке: {e}")
-        await update.message.reply_text("❌ Не удалось загрузить изображение.")
+        await update.message.reply_text("❌ Ошибка при загрузке на imgbb.")
 
 async def main():
     app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    await app.run_polling()
 
-if __name__ == '__main__':
-    import asyncio, nest_asyncio
+
+    await app.bot.set_webhook(url=f"{BASE_URL}/webhook")
+    await app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 8443)),
+        webhook_path="/webhook"
+    )
+
+if __name__ == "__main__":
+    import nest_asyncio
+    import asyncio
     nest_asyncio.apply()
     asyncio.run(main())

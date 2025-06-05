@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: photo-collage-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 photo_stitcher_bot.py
+    envVars:
+      - key: BOT_TOKEN
+        value: <8061285829:AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM>
+      - key: BASE_URL
+        value: https://one-pb08.onrender.com
+      - key: IMGBB_API_KEY
+        value: <324d90875472bf6af97d09df17726bf4>
