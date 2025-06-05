@@ -1,28 +1,24 @@
 import logging
 import os
+import requests
 from io import BytesIO
 from PIL import Image
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-
 TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = os.getenv("BASE_URL")
-
+IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 user_state = {}
 user_photos = {}
 user_settings = {}
 
-
 WAITING_COUNT = "waiting_count"
 WAITING_PHOTOS = "waiting_photos"
 WAITING_DESCRIPTION = "waiting_description"
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -34,10 +30,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
     await update.message.reply_text(
-        "👋 Привет! Сколько фото хочешь сшить?",
-        reply_markup=markup
+        "👋 Привет! Сколько фото хочешь сшить?", reply_markup=markup
     )
-
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -63,7 +57,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_photos[user_id] = []
         user_settings[user_id] = {}
 
-
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     state = user_state.get(user_id)
@@ -80,7 +73,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state[user_id] = WAITING_DESCRIPTION
         await update.message.reply_text("✍️ Напиши описание для коллажа:")
 
-
 def stitch_images(images):
     pil_images = [Image.open(img).convert("RGB") for img in images]
     max_h = max(i.height for i in pil_images)
@@ -93,6 +85,21 @@ def stitch_images(images):
         x += i.width
     return result
 
+def upload_to_imgbb(image: Image.Image) -> str:
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=85)
+    buffer.seek(0)
+
+    response = requests.post(
+        "https://api.imgbb.com/1/upload",
+        params={"key": IMGBB_API_KEY},
+        files={"image": buffer}
+    )
+    data = response.json()
+    if response.status_code == 200 and data.get("success"):
+        return data["data"]["url"]
+    else:
+        raise Exception(data.get("error", {}).get("message", "Upload failed"))
 
 async def send_collage_link(update, context, description):
     user_id = update.effective_user.id
@@ -101,19 +108,16 @@ async def send_collage_link(update, context, description):
         return await update.message.reply_text("❌ Фото не найдены")
 
     result = stitch_images(images)
-    filename = f"collage_{user_id}.jpg"
-    output_path = os.path.join("static", filename)
 
-   
-    os.makedirs("static", exist_ok=True)
-    result.save(output_path, format="JPEG", quality=85)
-
-    link = f"{BASE_URL}/static/{filename}"
-    await update.message.reply_photo(
-        photo=link,
-        caption=f"📝 {description}\n\n🔗 Ссылка: {link}"
-    )
-
+    try:
+        link = upload_to_imgbb(result)
+        await update.message.reply_photo(
+            photo=link,
+            caption=f"📝 {description}\n\n🔗 Ссылка: {link}"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке: {e}")
+        await update.message.reply_text("❌ Не удалось загрузить изображение.")
 
 async def main():
     app = Application.builder().token(TOKEN).build()
