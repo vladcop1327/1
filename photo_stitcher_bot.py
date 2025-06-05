@@ -5,19 +5,24 @@ from PIL import Image
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
+
 TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = os.getenv("BASE_URL")  # например: https://your-render-app.onrender.com
+BASE_URL = os.getenv("https://one-pb08.onrender.com")  
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 user_state = {}
 user_photos = {}
 user_settings = {}
 
+
 WAITING_COUNT = "waiting_count"
 WAITING_PHOTOS = "waiting_photos"
 WAITING_DESCRIPTION = "waiting_description"
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -32,6 +37,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Привет! Сколько фото хочешь сшить?",
         reply_markup=markup
     )
+
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -57,6 +63,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_photos[user_id] = []
         user_settings[user_id] = {}
 
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     state = user_state.get(user_id)
@@ -73,6 +80,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state[user_id] = WAITING_DESCRIPTION
         await update.message.reply_text("✍️ Напиши описание для коллажа:")
 
+
 def stitch_images(images):
     pil_images = [Image.open(img).convert("RGB") for img in images]
     max_h = max(i.height for i in pil_images)
@@ -85,6 +93,7 @@ def stitch_images(images):
         x += i.width
     return result
 
+
 async def send_collage_link(update, context, description):
     user_id = update.effective_user.id
     images = user_photos[user_id]
@@ -94,6 +103,9 @@ async def send_collage_link(update, context, description):
     result = stitch_images(images)
     filename = f"collage_{user_id}.jpg"
     output_path = os.path.join("static", filename)
+
+   
+    os.makedirs("static", exist_ok=True)
     result.save(output_path, format="JPEG", quality=85)
 
     link = f"{BASE_URL}/static/{filename}"
@@ -101,6 +113,7 @@ async def send_collage_link(update, context, description):
         photo=link,
         caption=f"📝 {description}\n\n🔗 Ссылка: {link}"
     )
+
 
 async def main():
     app = Application.builder().token(TOKEN).build()
@@ -112,3 +125,4 @@ async def main():
 if __name__ == '__main__':
     import asyncio, nest_asyncio
     nest_asyncio.apply()
+    asyncio.run(main())
