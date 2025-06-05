@@ -2,15 +2,12 @@ import logging
 from io import BytesIO
 from PIL import Image
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from telegraph import upload_file
-import asyncio
-import nest_asyncio
 import os
 
-nest_asyncio.apply()
-
-TOKEN = '8061285829:AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM' 
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -87,7 +84,6 @@ async def send_collage(update, context, description):
     stitched = stitch_images(images)
     filename = f"collage_{user_id}.jpg"
 
-    # Зберігаємо файл на диск
     stitched.seek(0)
     with open(filename, "wb") as f:
         f.write(stitched.read())
@@ -132,8 +128,14 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    print("🤖 Бот запущен")
-    await app.run_polling()
+    # Встановлюємо webhook
+    await app.bot.set_webhook(url=WEBHOOK_URL)
+    await app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 8443)),
+        webhook_url=WEBHOOK_URL,
+    )
 
 if __name__ == '__main__':
+    import asyncio
     asyncio.run(main())

@@ -1,4 +1,4 @@
-python-telegram-bot==20.3
-Pillow
+python-telegram-bot==20.6
+telegraph==0.6.0
+pillow
 nest_asyncio
-telegraph
