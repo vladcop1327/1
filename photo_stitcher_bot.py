@@ -7,7 +7,7 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = os.getenv("https://one-pb08.onrender.com")   
+BASE_URL = os.getenv("BASE_URL")
 IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
