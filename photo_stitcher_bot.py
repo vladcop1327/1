@@ -1,11 +1,12 @@
 import logging
+import os
 from io import BytesIO
 from PIL import Image
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InputFile
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-import os
 
 TOKEN = os.getenv("BOT_TOKEN")
+BASE_URL = os.getenv("BASE_URL")  # например: https://your-render-app.onrender.com
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,7 +29,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
     await update.message.reply_text(
-        "👋 Привет! Сколько фото хочешь сшить?", reply_markup=markup
+        "👋 Привет! Сколько фото хочешь сшить?",
+        reply_markup=markup
     )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -49,8 +51,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif state == WAITING_DESCRIPTION:
         description = update.message.text
-        await update.message.reply_text("🌀 Создаю PDF и изображение...")
-        await send_pdf(update, context, description)
+        await update.message.reply_text("🌀 Обрабатываю...")
+        await send_collage_link(update, context, description)
         user_state[user_id] = None
         user_photos[user_id] = []
         user_settings[user_id] = {}
@@ -60,7 +62,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = user_state.get(user_id)
 
     if state != WAITING_PHOTOS:
-        return await update.message.reply_text("🔁 Напиши /start чтобы начать сначала")
+        return await update.message.reply_text("🔁 Напиши /start чтобы начать заново.")
 
     photo = await update.message.photo[-1].get_file()
     data = await photo.download_as_bytearray()
@@ -69,7 +71,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expected = user_settings[user_id].get("count")
     if len(user_photos[user_id]) >= expected:
         user_state[user_id] = WAITING_DESCRIPTION
-        await update.message.reply_text("✍️ Напиши описание к коллажу:")
+        await update.message.reply_text("✍️ Напиши описание для коллажа:")
 
 def stitch_images(images):
     pil_images = [Image.open(img).convert("RGB") for img in images]
@@ -83,42 +85,22 @@ def stitch_images(images):
         x += i.width
     return result
 
-async def send_pdf(update, context, description):
+async def send_collage_link(update, context, description):
     user_id = update.effective_user.id
     images = user_photos[user_id]
     if not images:
         return await update.message.reply_text("❌ Фото не найдены")
 
-    stitched_image = stitch_images(images)
+    result = stitch_images(images)
+    filename = f"collage_{user_id}.jpg"
+    output_path = os.path.join("static", filename)
+    result.save(output_path, format="JPEG", quality=85)
 
-    # Сохраняем как PDF
-    pdf_path = f"collage_{user_id}.pdf"
-    stitched_image.save(pdf_path, "PDF", resolution=100.0)
-
-    # Сохраняем как JPG для предпросмотра
-    jpg_io = BytesIO()
-    stitched_image.save(jpg_io, format='JPEG', quality=90)
-    jpg_io.seek(0)
-
-    try:
-        # Отправляем изображение
-        await update.message.reply_photo(
-            photo=jpg_io,
-            caption=f"📝 Описание: {description}"
-        )
-
-        # Отправляем PDF
-        with open(pdf_path, "rb") as f:
-            await update.message.reply_document(
-                document=InputFile(f, filename="collage.pdf"),
-                caption="📄 PDF-файл с коллажем"
-            )
-    except Exception as e:
-        logger.error(f"Ошибка при отправке: {e}")
-        await update.message.reply_text("❌ Ошибка при отправке файлов.")
-    finally:
-        if os.path.exists(pdf_path):
-            os.remove(pdf_path)
+    link = f"{BASE_URL}/static/{filename}"
+    await update.message.reply_photo(
+        photo=link,
+        caption=f"📝 {description}\n\n🔗 Ссылка: {link}"
+    )
 
 async def main():
     app = Application.builder().token(TOKEN).build()
@@ -128,8 +110,5 @@ async def main():
     await app.run_polling()
 
 if __name__ == '__main__':
-    import nest_asyncio
-    import asyncio
-
+    import asyncio, nest_asyncio
     nest_asyncio.apply()
-    asyncio.get_event_loop().run_until_complete(main())
