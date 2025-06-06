@@ -1,122 +1,148 @@
 import os
-import logging
-from io import BytesIO
+import requests
 from PIL import Image
-from uuid import uuid4
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-
-TOKEN = os.getenv("BOT_TOKEN")
-STATIC_FOLDER = "static"
-BASE_URL = os.getenv("BASE_URL", "https://one-pb08.onrender.com")
-
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
+BOT_TOKEN = '8061285829:AAFMjY72I6W3yKDtbR5MaIT72F-R61wFcAM'
+IMGBB_API_KEY = '324d90875472bf6af97d09df17726bf4'
+TEMP_DIR = 'temp'
 user_state = {}
-user_photos = {}
-user_settings = {}
 
-WAITING_COUNT = "waiting_count"
-WAITING_PHOTOS = "waiting_photos"
-WAITING_DESCRIPTION = "waiting_description"
-
+if not os.path.exists(TEMP_DIR):
+    os.makedirs(TEMP_DIR)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_state[user_id] = WAITING_COUNT
-    user_photos[user_id] = []
-    user_settings[user_id] = {}
+    if user_id not in user_state:
+        keyboard = [[KeyboardButton("2️⃣ Сшить 2 фото")], [KeyboardButton("3️⃣ Сшить 3 фото")]]
+        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text(
+            "👋 Привет! Я помогу тебе сделать красивый коллаж из фото.\n\n"
+            "📌 Выбери, сколько фото ты хочешь сшить. Потом выбери, как их расположить — горизонтально ↔️ или вертикально ↕️.\n"
+            "После этого отправь нужное количество фото, придумай описание, и я пришлю ссылку на готовый результат. ✨",
+            reply_markup=markup
+        )
+    else:
+        await show_photo_count_options(update)
 
-    keyboard = [[KeyboardButton("2 фото")], [KeyboardButton("3 фото")]]
-    markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+async def show_photo_count_options(update: Update):
+    keyboard = [[KeyboardButton("2️⃣ Сшить 2 фото")], [KeyboardButton("3️⃣ Сшить 3 фото")]]
+    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("🔢 Сколько фото ты хочешь сшить?", reply_markup=markup)
 
-    await update.message.reply_text("👋 Привет! Сколько фото хочешь сшить?", reply_markup=markup)
-
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    state = user_state.get(user_id)
-    text = update.message.text.lower()
+    text = (update.message.text or '').strip()
 
-    if state == WAITING_COUNT:
-        if "2" in text:
-            user_settings[user_id]["count"] = 2
-        elif "3" in text:
-            user_settings[user_id]["count"] = 3
+    if "новый" in text.lower() and "коллаж" in text.lower():
+        reset_user(user_id)
+        await show_photo_count_options(update)
+        return
+
+    if text.startswith("2️⃣") or text.startswith("3️⃣"):
+        user_state[user_id] = {
+            'count': int(text[0]),
+            'photos': [],
+            'awaiting_description': False,
+            'orientation': None
+        }
+        keyboard = [[KeyboardButton("↔️ Горизонтально"), KeyboardButton("↕️ Вертикально")]]
+        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text("📐 Как расположить фото в коллаже?", reply_markup=markup)
+        return
+
+    if text in ["↔️ Горизонтально", "↕️ Вертикально"] and user_id in user_state:
+        user_state[user_id]['orientation'] = 'horizontal' if "↔️" in text else 'vertical'
+        await update.message.reply_text(
+            f"📥 Жду 1/{user_state[user_id]['count']} фото...",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+
+    if update.message.photo and user_id in user_state:
+        state = user_state[user_id]
+        photo = update.message.photo[-1]
+        file = await photo.get_file()
+        file_path = f"{TEMP_DIR}/{user_id}_{len(state['photos'])}.jpg"
+        await file.download_to_drive(file_path)
+        state['photos'].append(file_path)
+
+        received = len(state['photos'])
+        total = state['count']
+
+        if received < total:
+            await update.message.reply_text(f"📥 Жду {received + 1}/{total} фото...")
         else:
-            await update.message.reply_text("❗ Выбери: 2 фото или 3 фото.")
-            return
-        user_state[user_id] = WAITING_PHOTOS
-        await update.message.reply_text("📸 Отправь фото (по одному или все сразу).")
+            state['awaiting_description'] = True
+            await update.message.reply_text("✍️ Введи описание для коллажа:")
+        return
 
-    elif state == WAITING_DESCRIPTION:
-        description = update.message.text
-        await update.message.reply_text("🌀 Обрабатываю...")
-        await send_collage(update, context, description)
-        user_state[user_id] = None
-        user_photos[user_id] = []
-        user_settings[user_id] = {}
+    if user_id in user_state and user_state[user_id].get('awaiting_description'):
+        await update.message.reply_text("⏳ Обрабатываю коллаж...")
+        await process_collage(update, user_id, text)
 
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    state = user_state.get(user_id)
-
-    if state != WAITING_PHOTOS:
-        return await update.message.reply_text("🔁 Напиши /start чтобы начать заново.")
-
-    photo = await update.message.photo[-1].get_file()
-    data = await photo.download_as_bytearray()
-    user_photos[user_id].append(BytesIO(data))
-
-    expected = user_settings[user_id].get("count")
-    if len(user_photos[user_id]) >= expected:
-        user_state[user_id] = WAITING_DESCRIPTION
-        await update.message.reply_text("✍️ Напиши описание для коллажа:")
+def reset_user(user_id):
+    if user_id in user_state:
+        try:
+            for p in user_state[user_id].get('photos', []):
+                if os.path.exists(p): os.remove(p)
+            path = f"{TEMP_DIR}/collage_{user_id}.jpg"
+            if os.path.exists(path): os.remove(path)
+        except: pass
+        del user_state[user_id]
 
 
-def stitch_images(images):
-    pil_images = [Image.open(img).convert("RGB") for img in images]
-    max_h = max(i.height for i in pil_images)
-    resized = [i.resize((int(i.width * max_h / i.height), max_h)) for i in pil_images]
-    total_w = sum(i.width for i in resized)
-    result = Image.new('RGB', (total_w, max_h))
-    x = 0
-    for i in resized:
-        result.paste(i, (x, 0))
-        x += i.width
-    return result
+async def process_collage(update: Update, user_id: int, description: str):
+    orientation = user_state[user_id].get('orientation', 'horizontal')
+    raw_images = [Image.open(p).convert("RGB") for p in user_state[user_id]['photos']]
 
+    if orientation == 'horizontal':
+        h = min(img.height for img in raw_images)
+        images = [img.resize((int(img.width * h / img.height), h), Image.LANCZOS) for img in raw_images]
+        collage = Image.new('RGB', (sum(img.width for img in images), h))
+        offset = 0
+        for img in images:
+            collage.paste(img, (offset, 0))
+            offset += img.width
+    else:
+        w = min(img.width for img in raw_images)
+        images = [img.resize((w, int(img.height * w / img.width)), Image.LANCZOS) for img in raw_images]
+        collage = Image.new('RGB', (w, sum(img.height for img in images)))
+        offset = 0
+        for img in images:
+            collage.paste(img, (0, offset))
+            offset += img.height
 
-async def send_collage(update, context, description):
-    user_id = update.effective_user.id
-    images = user_photos[user_id]
-    if not images:
-        return await update.message.reply_text("❌ Фото не найдены")
+    target_width = 800
+    if collage.width > target_width:
+        ratio = target_width / collage.width
+        collage = collage.resize((target_width, int(collage.height * ratio)), Image.LANCZOS)
 
-    result = stitch_images(images)
-    if not os.path.exists(STATIC_FOLDER):
-        os.makedirs(STATIC_FOLDER)
-    filename = f"collage_{user_id}_{uuid4().hex}.jpg"
-    filepath = os.path.join(STATIC_FOLDER, filename)
-    result.save(filepath, format="JPEG", quality=90)
+    collage_path = f"{TEMP_DIR}/collage_{user_id}.jpg"
+    collage.save(collage_path, optimize=True, quality=85)
 
-    url = f"{BASE_URL}/static/{filename}"
-    await update.message.reply_photo(photo=url, caption=f"📝 {description}\n\n🔗 Ссылка: {url}")
+    with open(collage_path, 'rb') as f:
+        res = requests.post(
+            "https://api.imgbb.com/1/upload",
+            params={"key": IMGBB_API_KEY},
+            files={"image": f}
+        )
 
+    if res.ok:
+        url = res.json()["data"]["url"]
+        await update.message.reply_text(f"{description}\n\n{url}", disable_web_page_preview=False)
+        keyboard = [[KeyboardButton("🔁 Сделать новый коллаж")]]
+        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text("✅ Готово! Хочешь сделать ещё?", reply_markup=markup)
+    else:
+        await update.message.reply_text("❌ Ошибка при загрузке изображения.")
 
-async def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    await app.run_polling()
+    reset_user(user_id)
 
 if __name__ == '__main__':
-    import nest_asyncio, asyncio
-    nest_asyncio.apply()
-    asyncio.run(main())
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.ALL, message_handler))
+    app.run_polling()
