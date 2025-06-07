@@ -14,85 +14,121 @@ if not os.path.exists(TEMP_DIR):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in user_state:
-        keyboard = [[KeyboardButton("2️⃣ Сшить 2 фото")], [KeyboardButton("3️⃣ Сшить 3 фото")]]
-        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text(
-            "👋 Привет! Я помогу тебе сделать красивый коллаж из фото.\n\n"
-            "📌 Выбери, сколько фото ты хочешь сшить. Потом выбери, как их расположить — горизонтально ↔️ или вертикально ↕️.\n"
-            "После этого отправь нужное количество фото, придумай описание, и я пришлю ссылку на готовый результат. ✨",
-            reply_markup=markup
-        )
-    else:
+    reset_user(user_id)
+    keyboard = [[KeyboardButton("📌 Сшить фото в коллаж")], [KeyboardButton("🔗 Получить ссылку на фото")]]
+    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text(
+        "👋 Привет! Я могу сшивать фото или давать ссылку на отправленное фото. Выбери режим:",
+        reply_markup=markup
+    )
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = (update.message.text or '').strip()
+
+    if text == "📌 Сшить фото в коллаж":
+        user_state[user_id] = {'mode': 'collage'}
         await show_photo_count_options(update)
+        return
+
+    if text == "🔗 Получить ссылку на фото":
+        user_state[user_id] = {'mode': 'upload'}
+        await update.message.reply_text("📥 Отправь фото с подписью, и я верну тебе ссылку и описание")
+        return
+
+    if user_id not in user_state:
+        keyboard = [[KeyboardButton("📌 Сшить фото в коллаж")], [KeyboardButton("🔗 Получить ссылку на фото")]]
+        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text("Пожалуйста, сначала выбери режим:", reply_markup=markup)
+        return
+
+    mode = user_state[user_id].get('mode')
+
+    if mode == 'upload':
+        if update.message.photo and update.message.caption:
+            photo = update.message.photo[-1]
+            file = await photo.get_file()
+            file_path = f"{TEMP_DIR}/{user_id}_upload.jpg"
+            await file.download_to_drive(file_path)
+            with open(file_path, 'rb') as f:
+                res = requests.post(
+                    "https://api.imgbb.com/1/upload",
+                    params={"key": IMGBB_API_KEY},
+                    files={"image": f}
+                )
+            if res.ok:
+                url = res.json()["data"]["url"]
+                clean_caption = update.message.caption.strip().replace('\n', ' ').replace('\r', '')
+                with open(file_path, 'rb') as img:
+                    await update.message.reply_photo(photo=img, caption=f"{clean_caption} {url}")
+            else:
+                await update.message.reply_text("❌ Ошибка при загрузке изображения")
+            return
+
+    if mode == 'collage':
+        if "новый" in text.lower() and "коллаж" in text.lower():
+            reset_user(user_id)
+            await show_photo_count_options(update)
+            return
+
+        if text.startswith("2️⃣") or text.startswith("3️⃣"):
+            user_state[user_id].update({
+                'count': int(text[0]),
+                'photos': [],
+                'awaiting_description': False,
+                'orientation': None
+            })
+            keyboard = [[KeyboardButton("↔️ Горизонтально"), KeyboardButton("↕️ Вертикально")]]
+            markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            await update.message.reply_text("📐 Как расположить фото в коллаже?", reply_markup=markup)
+            return
+
+        if text in ["↔️ Горизонтально", "↕️ Вертикально"]:
+            user_state[user_id]['orientation'] = 'horizontal' if "↔️" in text else 'vertical'
+            await update.message.reply_text(
+                f"📥 Жду 1/{user_state[user_id]['count']} фото...",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return
+
+        if update.message.photo:
+            state = user_state[user_id]
+            photo = update.message.photo[-1]
+            file = await photo.get_file()
+            file_path = f"{TEMP_DIR}/{user_id}_{len(state['photos'])}.jpg"
+            await file.download_to_drive(file_path)
+            state['photos'].append(file_path)
+
+            received = len(state['photos'])
+            total = state['count']
+
+            if received < total:
+                await update.message.reply_text(f"📥 Жду {received + 1}/{total} фото...")
+            else:
+                state['awaiting_description'] = True
+                await update.message.reply_text("✍️ Введи описание для коллажа:")
+            return
+
+        if user_state[user_id].get('awaiting_description'):
+            await update.message.reply_text("⏳ Обрабатываю коллаж...")
+            await process_collage(update, user_id, text)
 
 async def show_photo_count_options(update: Update):
     keyboard = [[KeyboardButton("2️⃣ Сшить 2 фото")], [KeyboardButton("3️⃣ Сшить 3 фото")]]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text("🔢 Сколько фото ты хочешь сшить?", reply_markup=markup)
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = (update.message.text or '').strip()
-
-    if "новый" in text.lower() and "коллаж" in text.lower():
-        reset_user(user_id)
-        await show_photo_count_options(update)
-        return
-
-    if text.startswith("2️⃣") or text.startswith("3️⃣"):
-        user_state[user_id] = {
-            'count': int(text[0]),
-            'photos': [],
-            'awaiting_description': False,
-            'orientation': None
-        }
-        keyboard = [[KeyboardButton("↔️ Горизонтально"), KeyboardButton("↕️ Вертикально")]]
-        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text("📐 Как расположить фото в коллаже?", reply_markup=markup)
-        return
-
-    if text in ["↔️ Горизонтально", "↕️ Вертикально"] and user_id in user_state:
-        user_state[user_id]['orientation'] = 'horizontal' if "↔️" in text else 'vertical'
-        await update.message.reply_text(
-            f"📥 Жду 1/{user_state[user_id]['count']} фото...",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return
-
-    if update.message.photo and user_id in user_state:
-        state = user_state[user_id]
-        photo = update.message.photo[-1]
-        file = await photo.get_file()
-        file_path = f"{TEMP_DIR}/{user_id}_{len(state['photos'])}.jpg"
-        await file.download_to_drive(file_path)
-        state['photos'].append(file_path)
-
-        received = len(state['photos'])
-        total = state['count']
-
-        if received < total:
-            await update.message.reply_text(f"📥 Жду {received + 1}/{total} фото...")
-        else:
-            state['awaiting_description'] = True
-            await update.message.reply_text("✍️ Введи описание для коллажа:")
-        return
-
-    if user_id in user_state and user_state[user_id].get('awaiting_description'):
-        await update.message.reply_text("⏳ Обрабатываю коллаж...")
-        await process_collage(update, user_id, text)
-
-
 def reset_user(user_id):
     if user_id in user_state:
         try:
             for p in user_state[user_id].get('photos', []):
                 if os.path.exists(p): os.remove(p)
-            path = f"{TEMP_DIR}/collage_{user_id}.jpg"
-            if os.path.exists(path): os.remove(path)
+            path1 = f"{TEMP_DIR}/{user_id}_upload.jpg"
+            path2 = f"{TEMP_DIR}/collage_{user_id}.jpg"
+            if os.path.exists(path1): os.remove(path1)
+            if os.path.exists(path2): os.remove(path2)
         except: pass
         del user_state[user_id]
-
 
 async def process_collage(update: Update, user_id: int, description: str):
     orientation = user_state[user_id].get('orientation', 'horizontal')
@@ -132,7 +168,9 @@ async def process_collage(update: Update, user_id: int, description: str):
 
     if res.ok:
         url = res.json()["data"]["url"]
-        await update.message.reply_text(f"{description}\n\n{url}", disable_web_page_preview=False)
+        clean_description = description.strip().replace('\n', ' ').replace('\r', '')
+        with open(collage_path, 'rb') as img:
+            await update.message.reply_photo(photo=img, caption=f"{clean_description} {url}")
         keyboard = [[KeyboardButton("🔁 Сделать новый коллаж")]]
         markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text("✅ Готово! Хочешь сделать ещё?", reply_markup=markup)
