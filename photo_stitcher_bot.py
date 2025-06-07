@@ -27,8 +27,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or '').strip()
 
     if text == "📌 Сшить фото в коллаж":
-        user_state[user_id] = {'mode': 'collage'}
-        await show_photo_count_options(update)
+        user_state[user_id] = {
+            'mode': 'collage',
+            'count': 3,
+            'photos': [],
+            'awaiting_description': False,
+            'orientation': 'horizontal',
+            'media_group_id': None,
+            'caption': None
+        }
+        await update.message.reply_text("📥 Отправь 3 фото (можно с описанием)", reply_markup=ReplyKeyboardRemove())
         return
 
     if text == "🔗 Получить ссылку на фото":
@@ -42,7 +50,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, сначала выбери режим:", reply_markup=markup)
         return
 
-    mode = user_state[user_id].get('mode')
+    state = user_state[user_id]
+    mode = state.get('mode')
 
     if mode == 'upload':
         if update.message.photo and update.message.caption:
@@ -60,63 +69,48 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 url = res.json()["data"]["url"]
                 clean_caption = update.message.caption.strip().replace('\n', ' ').replace('\r', '')
                 with open(file_path, 'rb') as img:
-                    await update.message.reply_photo(photo=img, caption=f"{clean_caption} {url}")
+                    await update.message.reply_photo(photo=img)
+                await update.message.reply_text(f"{clean_caption} {url}")
             else:
                 await update.message.reply_text("❌ Ошибка при загрузке изображения")
             return
 
     if mode == 'collage':
-        if "новый" in text.lower() and "коллаж" in text.lower():
-            reset_user(user_id)
-            await show_photo_count_options(update)
-            return
-
-        if text.startswith("2️⃣") or text.startswith("3️⃣"):
-            user_state[user_id].update({
-                'count': int(text[0]),
-                'photos': [],
-                'awaiting_description': False,
-                'orientation': None
-            })
-            keyboard = [[KeyboardButton("↔️ Горизонтально"), KeyboardButton("↕️ Вертикально")]]
-            markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            await update.message.reply_text("📐 Как расположить фото в коллаже?", reply_markup=markup)
-            return
-
-        if text in ["↔️ Горизонтально", "↕️ Вертикально"]:
-            user_state[user_id]['orientation'] = 'horizontal' if "↔️" in text else 'vertical'
-            await update.message.reply_text(
-                f"📥 Жду 1/{user_state[user_id]['count']} фото...",
-                reply_markup=ReplyKeyboardRemove()
-            )
-            return
-
         if update.message.photo:
-            state = user_state[user_id]
+            media_id = update.message.media_group_id
+            if media_id:
+                if state.get('media_group_id') != media_id:
+                    state['photos'] = []
+                    state['media_group_id'] = media_id
+                    state['caption'] = update.message.caption or "Коллаж готов"
+
+                photo = update.message.photo[-1]
+                file = await photo.get_file()
+                file_path = f"{TEMP_DIR}/{user_id}_{len(state['photos'])}.jpg"
+                await file.download_to_drive(file_path)
+                state['photos'].append(file_path)
+
+                if len(state['photos']) == 3:
+                    await update.message.reply_text("⏳ Обрабатываю коллаж...")
+                    await process_collage(update, user_id, state['caption'])
+                return
+
             photo = update.message.photo[-1]
             file = await photo.get_file()
             file_path = f"{TEMP_DIR}/{user_id}_{len(state['photos'])}.jpg"
             await file.download_to_drive(file_path)
             state['photos'].append(file_path)
 
-            received = len(state['photos'])
-            total = state['count']
-
-            if received < total:
-                await update.message.reply_text(f"📥 Жду {received + 1}/{total} фото...")
+            if len(state['photos']) < 3:
+                await update.message.reply_text(f"📥 Жду {len(state['photos']) + 1}/3 фото...")
             else:
-                state['awaiting_description'] = True
-                await update.message.reply_text("✍️ Введи описание для коллажа:")
-            return
-
-        if user_state[user_id].get('awaiting_description'):
-            await update.message.reply_text("⏳ Обрабатываю коллаж...")
-            await process_collage(update, user_id, text)
+                description = update.message.caption or "Коллаж готов"
+                await update.message.reply_text("⏳ Обрабатываю коллаж...")
+                await process_collage(update, user_id, description)
+        return
 
 async def show_photo_count_options(update: Update):
-    keyboard = [[KeyboardButton("2️⃣ Сшить 2 фото")], [KeyboardButton("3️⃣ Сшить 3 фото")]]
-    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text("🔢 Сколько фото ты хочешь сшить?", reply_markup=markup)
+    return
 
 def reset_user(user_id):
     if user_id in user_state:
@@ -131,53 +125,58 @@ def reset_user(user_id):
         del user_state[user_id]
 
 async def process_collage(update: Update, user_id: int, description: str):
-    orientation = user_state[user_id].get('orientation', 'horizontal')
-    raw_images = [Image.open(p).convert("RGB") for p in user_state[user_id]['photos']]
+    try:
+        
+        orientation = user_state[user_id].get('orientation', 'horizontal')
+        raw_images = [Image.open(p).convert("RGB") for p in user_state[user_id]['photos']]
 
-    if orientation == 'horizontal':
-        h = min(img.height for img in raw_images)
-        images = [img.resize((int(img.width * h / img.height), h), Image.LANCZOS) for img in raw_images]
-        collage = Image.new('RGB', (sum(img.width for img in images), h))
-        offset = 0
-        for img in images:
-            collage.paste(img, (offset, 0))
-            offset += img.width
-    else:
-        w = min(img.width for img in raw_images)
-        images = [img.resize((w, int(img.height * w / img.width)), Image.LANCZOS) for img in raw_images]
-        collage = Image.new('RGB', (w, sum(img.height for img in images)))
-        offset = 0
-        for img in images:
-            collage.paste(img, (0, offset))
-            offset += img.height
+        if orientation == 'horizontal':
+            h = min(img.height for img in raw_images)
+            images = [img.resize((int(img.width * h / img.height), h), Image.LANCZOS) for img in raw_images]
+            collage = Image.new('RGB', (sum(img.width for img in images), h))
+            offset = 0
+            for img in images:
+                collage.paste(img, (offset, 0))
+                offset += img.width
+        else:
+            w = min(img.width for img in raw_images)
+            images = [img.resize((w, int(img.height * w / img.width)), Image.LANCZOS) for img in raw_images]
+            collage = Image.new('RGB', (w, sum(img.height for img in images)))
+            offset = 0
+            for img in images:
+                collage.paste(img, (0, offset))
+                offset += img.height
 
-    target_width = 800
-    if collage.width > target_width:
-        ratio = target_width / collage.width
-        collage = collage.resize((target_width, int(collage.height * ratio)), Image.LANCZOS)
+        target_width = 800
+        if collage.width > target_width:
+            ratio = target_width / collage.width
+            collage = collage.resize((target_width, int(collage.height * ratio)), Image.LANCZOS)
 
-    collage_path = f"{TEMP_DIR}/collage_{user_id}.jpg"
-    collage.save(collage_path, optimize=True, quality=85)
+        collage_path = f"{TEMP_DIR}/collage_{user_id}.jpg"
+        collage.save(collage_path, optimize=True, quality=85)
 
-    with open(collage_path, 'rb') as f:
-        res = requests.post(
-            "https://api.imgbb.com/1/upload",
-            params={"key": IMGBB_API_KEY},
-            files={"image": f}
-        )
+        with open(collage_path, 'rb') as f:
+            res = requests.post(
+                "https://api.imgbb.com/1/upload",
+                params={"key": IMGBB_API_KEY},
+                files={"image": f}
+            )
 
-    if res.ok:
-        url = res.json()["data"]["url"]
-        clean_description = description.strip().replace('\n', ' ').replace('\r', '')
-        with open(collage_path, 'rb') as img:
-            await update.message.reply_photo(photo=img, caption=f"{clean_description} {url}")
-        keyboard = [[KeyboardButton("🔁 Сделать новый коллаж")]]
-        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text("✅ Готово! Хочешь сделать ещё?", reply_markup=markup)
-    else:
-        await update.message.reply_text("❌ Ошибка при загрузке изображения.")
+        if res.ok:
+            url = res.json()["data"]["url"]
+            clean_description = description.strip().replace('\n', ' ').replace('\r', '')
+            
+            await update.message.reply_text(f"{clean_description} {url}")
+        else:
+            await update.message.reply_text("❌ Ошибка при загрузке изображения.")
 
-    reset_user(user_id)
+        user_state[user_id].update({
+            'photos': [],
+            'caption': None,
+            'media_group_id': None
+        })
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка в процессе коллажа: {e}")
 
 if __name__ == '__main__':
     app = Application.builder().token(BOT_TOKEN).build()
