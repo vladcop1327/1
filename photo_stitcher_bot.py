@@ -26,17 +26,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = (update.message.text or '').strip()
 
+    if user_id in user_state and user_state[user_id].get('mode') == 'collage':
+        if text and not update.message.photo:
+            user_state[user_id]['caption'] = text
+
     if text == "📌 Сшить фото в коллаж":
         user_state[user_id] = {
             'mode': 'collage',
             'count': 3,
             'photos': [],
-            'awaiting_description': False,
+            'caption': None,
             'orientation': 'horizontal',
-            'media_group_id': None,
-            'caption': None
+            'media_group_id': None
         }
-        await update.message.reply_text("📥 Отправь 3 фото (можно с описанием)", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("📥 Отправь 3 фото (можно с подписью)", reply_markup=ReplyKeyboardRemove())
         return
 
     if text == "🔗 Получить ссылку на фото":
@@ -82,7 +85,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if state.get('media_group_id') != media_id:
                     state['photos'] = []
                     state['media_group_id'] = media_id
-                    state['caption'] = update.message.caption or "Коллаж готов"
+                if update.message.caption:
+                    state['caption'] = update.message.caption
 
                 photo = update.message.photo[-1]
                 file = await photo.get_file()
@@ -92,7 +96,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 if len(state['photos']) == 3:
                     await update.message.reply_text("⏳ Обрабатываю коллаж...")
-                    await process_collage(update, user_id, state['caption'])
+                    await process_collage(update, user_id)
                 return
 
             photo = update.message.photo[-1]
@@ -101,16 +105,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await file.download_to_drive(file_path)
             state['photos'].append(file_path)
 
+            if update.message.caption:
+                state['caption'] = update.message.caption
+
             if len(state['photos']) < 3:
                 await update.message.reply_text(f"📥 Жду {len(state['photos']) + 1}/3 фото...")
             else:
-                description = update.message.caption or "Коллаж готов"
                 await update.message.reply_text("⏳ Обрабатываю коллаж...")
-                await process_collage(update, user_id, description)
+                await process_collage(update, user_id)
         return
-
-async def show_photo_count_options(update: Update):
-    return
 
 def reset_user(user_id):
     if user_id in user_state:
@@ -124,11 +127,12 @@ def reset_user(user_id):
         except: pass
         del user_state[user_id]
 
-async def process_collage(update: Update, user_id: int, description: str):
+async def process_collage(update: Update, user_id: int):
     try:
-        
-        orientation = user_state[user_id].get('orientation', 'horizontal')
-        raw_images = [Image.open(p).convert("RGB") for p in user_state[user_id]['photos']]
+        state = user_state[user_id]
+        orientation = state.get('orientation', 'horizontal')
+        description = state.get('caption') or "Коллаж готов"
+        raw_images = [Image.open(p).convert("RGB") for p in state['photos']]
 
         if orientation == 'horizontal':
             h = min(img.height for img in raw_images)
@@ -165,11 +169,11 @@ async def process_collage(update: Update, user_id: int, description: str):
         if res.ok:
             url = res.json()["data"]["url"]
             clean_description = description.strip().replace('\n', ' ').replace('\r', '')
-            
             await update.message.reply_text(f"{clean_description} {url}")
         else:
             await update.message.reply_text("❌ Ошибка при загрузке изображения.")
 
+        # Очистка состояния
         user_state[user_id].update({
             'photos': [],
             'caption': None,
