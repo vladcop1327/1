@@ -95,7 +95,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 state['photos'].append(file_path)
 
                 if len(state['photos']) == 3:
-                    await update.message.reply_text("⏳ Обрабатываю коллаж...")
                     await process_collage(update, user_id)
                 return
 
