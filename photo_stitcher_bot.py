@@ -13,8 +13,6 @@ if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    reset_user(user_id)
     keyboard = [[KeyboardButton("📌 Сшить фото в коллаж")], [KeyboardButton("🔗 Получить ссылку на фото")]]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
@@ -25,10 +23,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = (update.message.text or '').strip()
-
-    if user_id in user_state and user_state[user_id].get('mode') == 'collage':
-        if text and not update.message.photo:
-            user_state[user_id]['caption'] = text
 
     if text == "📌 Сшить фото в коллаж":
         user_state[user_id] = {
@@ -47,13 +41,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📥 Отправь фото с подписью, и я верну тебе ссылку и описание")
         return
 
-    if user_id not in user_state:
-        keyboard = [[KeyboardButton("📌 Сшить фото в коллаж")], [KeyboardButton("🔗 Получить ссылку на фото")]]
-        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text("Пожалуйста, сначала выбери режим:", reply_markup=markup)
-        return
+    if user_id not in user_state or user_state[user_id].get('mode') is None:
+        if not (user_id in user_state and user_state[user_id].get('mode') == 'collage' and update.message.photo):
+            keyboard = [[KeyboardButton("📌 Сшить фото в коллаж")], [KeyboardButton("🔗 Получить ссылку на фото")]]
+            markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            await update.message.reply_text("Пожалуйста, сначала выбери режим:", reply_markup=markup)
+            return
 
-    state = user_state[user_id]
+    state = user_state.get(user_id, {})
     mode = state.get('mode')
 
     if mode == 'upload':
@@ -70,33 +65,29 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             if res.ok:
                 url = res.json()["data"]["url"]
-                clean_caption = update.message.caption.strip().replace('\n', ' ').replace('\r', '')
-                with open(file_path, 'rb') as img:
-                    await update.message.reply_photo(photo=img)
-                await update.message.reply_text(f"{clean_caption} {url}")
+                clean_caption = update.message.caption.strip()
+                await update.message.reply_photo(photo=open(file_path, 'rb'))
+                await update.message.reply_text(f"{clean_caption}\n{url}")
+                reset_user(user_id)
             else:
                 await update.message.reply_text("❌ Ошибка при загрузке изображения")
+            return
+        elif update.message.photo and not update.message.caption:
+            await update.message.reply_text("Пожалуйста, отправь фото с подписью.")
             return
 
     if mode == 'collage':
         if update.message.photo:
             media_id = update.message.media_group_id
-            if media_id:
-                if state.get('media_group_id') != media_id:
-                    state['photos'] = []
-                    state['media_group_id'] = media_id
-                if update.message.caption:
-                    state['caption'] = update.message.caption
 
-                photo = update.message.photo[-1]
-                file = await photo.get_file()
-                file_path = f"{TEMP_DIR}/{user_id}_{len(state['photos'])}.jpg"
-                await file.download_to_drive(file_path)
-                state['photos'].append(file_path)
-
-                if len(state['photos']) == 3:
-                    await process_collage(update, user_id)
-                return
+            if media_id and state.get('media_group_id') != media_id:
+                state['photos'] = []
+                state['media_group_id'] = media_id
+            elif not media_id and not state.get('media_group_id'):
+                pass
+            
+            if update.message.caption:
+                state['caption'] = update.message.caption
 
             photo = update.message.photo[-1]
             file = await photo.get_file()
@@ -104,14 +95,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await file.download_to_drive(file_path)
             state['photos'].append(file_path)
 
-            if update.message.caption:
-                state['caption'] = update.message.caption
-
             if len(state['photos']) < 3:
-                await update.message.reply_text(f"📥 Жду {len(state['photos']) + 1}/3 фото...")
+                await update.message.reply_text(f"📥 Жду {len(state['photos'])}/3 фото...")
             else:
                 await process_collage(update, user_id)
-        return
+            return
+        elif text and user_id in user_state and user_state[user_id].get('mode') == 'collage' and not update.message.photo:
+            state['caption'] = text
+            await update.message.reply_text("Пожалуйста, продолжай отправлять фотографии.")
+            return
 
 def reset_user(user_id):
     if user_id in user_state:
@@ -122,14 +114,16 @@ def reset_user(user_id):
             path2 = f"{TEMP_DIR}/collage_{user_id}.jpg"
             if os.path.exists(path1): os.remove(path1)
             if os.path.exists(path2): os.remove(path2)
-        except: pass
-        del user_state[user_id]
+        except Exception as e:
+            pass
+        finally:
+            del user_state[user_id]
 
 async def process_collage(update: Update, user_id: int):
     try:
         state = user_state[user_id]
         orientation = state.get('orientation', 'horizontal')
-        description = state.get('caption') or "Коллаж готов"
+        description = state.get('caption') or ""
         raw_images = [Image.open(p).convert("RGB") for p in state['photos']]
 
         if orientation == 'horizontal':
@@ -166,19 +160,14 @@ async def process_collage(update: Update, user_id: int):
 
         if res.ok:
             url = res.json()["data"]["url"]
-            clean_description = description.strip().replace('\n', ' ').replace('\r', '')
-            await update.message.reply_text(f"{clean_description} {url}")
+            await update.message.reply_text(f"{description}\n{url}")
         else:
             await update.message.reply_text("❌ Ошибка при загрузке изображения.")
 
-        # Очистка состояния
-        user_state[user_id].update({
-            'photos': [],
-            'caption': None,
-            'media_group_id': None
-        })
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка в процессе коллажа: {e}")
+    finally:
+        reset_user(user_id)
 
 if __name__ == '__main__':
     app = Application.builder().token(BOT_TOKEN).build()
