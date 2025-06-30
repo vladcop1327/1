@@ -57,20 +57,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file = await photo.get_file()
             file_path = f"{TEMP_DIR}/{user_id}_upload.jpg"
             await file.download_to_drive(file_path)
-            with open(file_path, 'rb') as f:
-                res = requests.post(
-                    "https://api.imgbb.com/1/upload",
-                    params={"key": IMGBB_API_KEY},
-                    files={"image": f}
-                )
+            await update.message.reply_text(f"Загружено, размер: {os.path.getsize(file_path)} байт")
+            
+            f = open(file_path, 'rb')
+            res = requests.post(
+                "https://api.imgbb.com/1/upload",
+                data={"key": IMGBB_API_KEY},
+                files={"image": f}
+            )
+            f.close()
+
             if res.ok:
                 url = res.json()["data"]["url"]
                 clean_caption = update.message.caption.strip().replace('\r', '')
-                with open(file_path, 'rb') as img:
-                    await update.message.reply_photo(photo=img)
+                await update.message.reply_photo(photo=file_path)
                 await update.message.reply_text(f"{clean_caption}\n{url}")
             else:
-                await update.message.reply_text("Ошибка загрузки")
+                await update.message.reply_text(f"Ошибка загрузки: {res.status_code}\n{res.text}")
             return
 
     if mode == 'collage':
@@ -130,18 +133,22 @@ async def process_collage(update: Update, user_id: int):
             collage = collage.resize((target_width, int(collage.height * ratio)), Image.LANCZOS)
         collage_path = f"{TEMP_DIR}/collage_{user_id}.jpg"
         collage.save(collage_path, optimize=True, quality=85)
-        with open(collage_path, 'rb') as f:
-            res = requests.post(
-                "https://api.imgbb.com/1/upload",
-                params={"key": IMGBB_API_KEY},
-                files={"image": f}
-            )
+
+        f = open(collage_path, 'rb')
+        res = requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={"key": IMGBB_API_KEY},
+            files={"image": f}
+        )
+        f.close()
+
         if res.ok:
             url = res.json()["data"]["url"]
             clean_description = description.strip().replace('\r', '')
             await update.message.reply_text(f"{clean_description}\n{url}")
         else:
-            await update.message.reply_text("Ошибка загрузки")
+            await update.message.reply_text(f"Ошибка загрузки: {res.status_code}\n{res.text}")
+
         clear_user_files(user_id)
         user_state[user_id].update({'photos': [], 'caption': None})
     except Exception as e:
